@@ -39,6 +39,19 @@
         assign price_container_id = 'price-' | append: section.id | append: '-sticky'
     %}
     <style>
+        :root {
+            --sticky-atc-height: 0px; /* Default value */
+            /* Transition for padding-bottom, matching the sticky bar's hide animation */
+            /* The transition should ideally match the exit animation of the sticky bar for smoothness */
+            /* Sticky bar transition: visibility 0s .15s, opacity .15s ease-out, transform .15s ease-out */
+            /* We'll apply a similar duration for the padding */
+            transition: padding-bottom .15s ease-out;
+        }
+
+        html.sticky-atc-active {
+            padding-bottom: var(--sticky-atc-height);
+        }
+
         #md-sticky-atc {
             position: fixed;
             bottom: 0;
@@ -345,6 +358,14 @@
             const priceContainer = stickyATC.querySelector('#{{ price_container_id }}');
             const mainPriceDiv = priceContainer ? priceContainer.querySelector('.price') : null;
 
+            // Cached DOM elements for updateStickyATCProductInfo
+            const salePriceEl = mainPriceDiv ? mainPriceDiv.querySelector('.price-item--sale') : null;
+            const compareAtPriceElDisplay = mainPriceDiv ? mainPriceDiv.querySelector('s.price-item--regular') : null;
+            const regularPriceEl = mainPriceDiv ? mainPriceDiv.querySelector('.price__regular .price-item--regular') : null;
+            const priceSaleWrapper = mainPriceDiv ? mainPriceDiv.querySelector('.price__sale') : null;
+            const priceRegularWrapper = mainPriceDiv ? mainPriceDiv.querySelector('.price__regular') : null;
+            const btnTextSpan = btn ? btn.querySelector('span:not(.visually-hidden)') : null;
+
             const mainATCButtonSelector = {{ main_atc_button_selector_js | json }};
             const mainVariantSelector = {{ main_variant_selector_js | json }};
 
@@ -364,23 +385,23 @@
                     const fallbackMainATC = document.querySelector('product-form:not(#md-sticky-atc .product-form) button[name="add"], product-form:not(#md-sticky-atc .product-form) button[type="submit"]');
                     if (fallbackMainATC) {
                         mainATCButtonToWatch = fallbackMainATC;
-                        // console.log('Sticky ATC: Using fallback main ATC button observer for product page.');
+                        console.log('Sticky ATC: Using fallback main ATC button observer for product page. Original selector was:', mainATCButtonSelector);
                     } else {
-                        console.warn('Sticky ATC: Main ATC button (and fallback) not found on product page. Selector:', mainATCButtonSelector, '. Sticky ATC might not show as expected.');
+                        console.warn('Sticky ATC: Main ATC button (and fallback) not found on product page. Initial selector:', mainATCButtonSelector, '. Sticky ATC might not show as expected or will rely on scroll offset. Check theme section settings for "Selector for Main ATC Button (Product Page)".');
                     }
                 } else if ({{ section.settings.enable_on_featured_product | default: false }}) {
                      // Für Featured Products ist das Fehlen von mainATCButtonToWatch ggf. ok,
                      // da diese manchmal keinen eigenen Button haben und der Sticky ATC per Offset gesteuert wird.
-                     // console.log('Sticky ATC: Main ATC button not found for featured product (selector:',mainATCButtonSelector,'). Will rely on offset or section settings.');
+                     console.log('Sticky ATC: Main ATC button not found for featured product (selector:', mainATCButtonSelector, '). Sticky ATC will rely on scroll offset as configured in theme settings.');
                 } else {
                     // Allgemeiner Fall, wenn kein Button gefunden wurde und kein spezifischer Kontext greift.
-                    // console.warn('Sticky ATC: Main ATC button to observe not found with selector:', mainATCButtonSelector, '. Sticky ATC might not show as expected.');
+                    console.warn('Sticky ATC: Main ATC button to observe not found. Attempted selector:', mainATCButtonSelector, '. Sticky ATC functionality might be limited or rely on scroll offset. Check theme settings if a specific button should be targeted.');
                 }
             }
 
             let threshold = 0;
             function calculateThreshold() {
-                setTimeout(() => {
+                requestAnimationFrame(() => {
                     if (!mainATCButtonToWatch) {
                         threshold = Number(stickyATC.dataset.offset) || 0;
                         return;
@@ -392,9 +413,9 @@
                     } else {
                         // Fallback, falls getBoundingClientRect aus irgendeinem Grund nicht die erwarteten Werte liefert
                         threshold = Number(stickyATC.dataset.offset) || 0;
-                        // console.warn("Sticky ATC: Could not get main button's dimensions, using offset only for threshold.");
+                        console.warn('Sticky ATC: Could not reliably get main ATC button dimensions. Relying on the specified scroll offset. This can occur if the target button is hidden (display:none) or not fully rendered when the calculation runs.');
                     }
-                }, 150);
+                });
             }
 
             calculateThreshold();
@@ -424,12 +445,12 @@
                     if (!stickyATC.classList.contains('show')) {
                         stickyATC.classList.add('show');
                         document.documentElement.style.setProperty('--sticky-atc-height', `${stickyATC.offsetHeight}px`);
-                        document.documentElement.style.paddingBottom = 'var(--sticky-atc-height)';
+                        document.documentElement.classList.add('sticky-atc-active'); // Add class
                     }
                 } else {
                     if (stickyATC.classList.contains('show')) {
                         stickyATC.classList.remove('show');
-                        document.documentElement.style.paddingBottom = '0';
+                        document.documentElement.classList.remove('sticky-atc-active'); // Remove class
                     }
                 }
             }
@@ -459,8 +480,8 @@
             // Produktinformationen im Sticky ATC (Bild, Preis, Button-Status) aktualisieren
             function updateStickyATCProductInfo() {
                 if (!selectField || !mainPriceDiv) {
-                    if (!selectField) console.warn('Sticky ATC: Variant select field not found in sticky bar for update.');
-                    if (!mainPriceDiv) console.warn('Sticky ATC: Main price div (.price) not found for dynamic updates.');
+                    if (!selectField) console.warn('Sticky ATC: Variant select field (expected: select[name="id"]) not found within the sticky ATC bar itself. Variant-specific information (image, price, availability) and synchronization will not function correctly. Please check the HTML structure of the #md-sticky-atc element, specifically the product form within it.');
+                    if (!mainPriceDiv) console.warn('Sticky ATC: Main price display div (expected class ".price" inside element with ID stored in `price_container_id`) not found within the sticky ATC bar. Price updates will not function correctly. Please check the HTML structure of the #md-sticky-atc element.');
                     return;
                 }
 
@@ -478,16 +499,7 @@
                 const variantComparePrice = selectedOption.dataset.variantComparePrice ? parseInt(selectedOption.dataset.variantComparePrice, 10) : null;
                 const moneyFormat = {{ shop.money_format | json }};
 
-                // Selektoren basierend auf der Struktur von price.liquid (Dawn-ähnlich)
-                const salePriceEl = mainPriceDiv.querySelector('.price-item--sale');
-                const compareAtPriceElDisplay = mainPriceDiv.querySelector('s.price-item--regular'); // s-Tag für den durchgestrichenen Preis
-                const regularPriceEl = mainPriceDiv.querySelector('.price__regular .price-item--regular'); // Regulärer Preis in seinem Container
-
-                // Die Container für Sale- und Regulärpreis
-                const priceSaleWrapper = mainPriceDiv.querySelector('.price__sale');
-                const priceRegularWrapper = mainPriceDiv.querySelector('.price__regular');
-
-
+                // Verwende die gecachten Elemente
                 if (variantComparePrice && variantComparePrice > variantPrice) { // Im Angebot
                     mainPriceDiv.classList.add('price--on-sale');
                     mainPriceDiv.classList.remove('price--no-compare');
@@ -496,7 +508,7 @@
                     if (compareAtPriceElDisplay) {
                         compareAtPriceElDisplay.innerHTML = formatShopifyMoney(variantComparePrice, moneyFormat);
                         compareAtPriceElDisplay.style.display = '';
-                    } else { // Fallback falls s-Tag nicht gefunden, versuche einen anderen üblichen Selektor
+                    } else if (mainPriceDiv) { // Fallback, nur wenn mainPriceDiv existiert
                         const fallbackCompareAt = mainPriceDiv.querySelector('.price-item--regular[class*="line-through"]');
                         if(fallbackCompareAt) fallbackCompareAt.innerHTML = formatShopifyMoney(variantComparePrice, moneyFormat);
                     }
@@ -526,9 +538,10 @@
                 }
 
                 // Button-Status (Verfügbarkeit und Text)
+                // Verwende das gecachte btnTextSpan
                 if (btn) {
                     const variantAvailable = !selectedOption.disabled;
-                    const btnTextSpan = btn.querySelector('span:not(.visually-hidden)'); // Text im Button
+                    // btnTextSpan wurde bereits außerhalb definiert und geprüft
                     if (variantAvailable) {
                         btn.disabled = false;
                         if (btnTextSpan) btnTextSpan.textContent = {{ 'products.product.add_to_cart' | t | json }};
